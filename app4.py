@@ -3,6 +3,7 @@ import pandas as pd
 import io
 import os
 from datetime import datetime
+import zoneinfo  # 引入時區控制套件
 
 st.set_page_config(page_title="SAA TCS Controller V2.0 專案進度查詢", layout="wide")
 
@@ -39,8 +40,9 @@ with st.sidebar:
                 df_filtered['Item_num'] = pd.to_numeric(df_filtered['Item'], errors='coerce')
                 df_filtered = df_filtered.sort_values(by=['Item_num', 'Item'], ascending=True).drop(columns=['Item_num'])
                 
-                # 取得目前時間
-                current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+                # 🌟 【修正時區 BUG】：強制指定抓取台灣台北時間 (UTC+8)
+                tz_taipei = zoneinfo.ZoneInfo("Asia/Taipei")
+                current_time = datetime.now(tz_taipei).strftime("%Y-%m-%d %H:%M")
                 
                 # 2. 擷取上傳的 Excel 檔案名稱作為資料版本
                 file_version_name = uploaded_file.name
@@ -54,6 +56,11 @@ with st.sidebar:
                 st.sidebar.success(f"🎉 資料同步成功！\n版本：{file_version_name}")
             except Exception as e:
                 st.sidebar.error(f"解析失敗，請確認檔案內有「成本-15」分頁。錯誤: {e}")
+
+    # 🌟 【新需求】：在左側邊欄最下方標註目前的軟體版本
+    st.sidebar.markdown("---")
+    st.sidebar.caption("🤖 系統軟體版本：`V2.1`")
+    st.sidebar.caption("⚙️ 核心引擎：Streamlit x Python 3.14")
 
 # --- 主畫面顯示區域（客戶看到的畫面） ---
 if os.path.exists(DATA_FILE):
@@ -70,7 +77,7 @@ if os.path.exists(DATA_FILE):
         version_label = meta_df.loc[0, 'version']
         time_label = meta_df.loc[0, 'update_time']
     
-    # 🌟 已修正這裡的參數名稱：將 unsafe_allow_all_html 改為 unsafe_allow_html
+    # 優化直式防跑版排版
     st.markdown(f"""
     <div style="background-color: #f1f5f9; padding: 15px; border-radius: 8px; border-left: 5px solid #0284c7; margin-bottom: 20px;">
         <p style="margin: 0; font-size: 14px; color: #64748b; font-weight: bold;">📌 資料版本 (BOM 檔名)：</p>
