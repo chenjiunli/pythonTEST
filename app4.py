@@ -3,11 +3,29 @@ import pandas as pd
 import io
 import os
 from datetime import datetime
-import zoneinfo  # 引入時區控制套件
+import zoneinfo
 
 st.set_page_config(page_title="SAA TCS Controller V2.0 專案進度查詢", layout="wide")
 
-# 1. 變更專案大標題
+# 🌟 【終極資安強化】：利用 CSS 徹底隱藏 Streamlit 表格右上角內建的下載 CSV、全螢幕、複製與搜尋小圖示
+# 同時禁止使用者在網頁上反白全選文字（防止客戶用 Ctrl+A 複製整張表）
+st.markdown("""
+    <style>
+    /* 隱藏表格右上角的所有控制按鈕 (下載、搜尋、複製等) */
+    [data-testid="stDataFrameToolbar"] {
+        display: none !important;
+    }
+    /* 禁止使用者反白選取網頁上的文字（防複製） */
+    body {
+        -webkit-user-select: none; /* Safari */
+        -moz-user-select: none;    /* Firefox */
+        -ms-user-select: none;     /* IE10+ */
+        user-select: none;         /* Standard */
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# 變更專案大標題
 st.title("🛠️ SAA TCS Controller V2.0 專案進度即時查詢面板")
 st.write("🤝 本面板資料已自動同步，並依 Item 進行排序。您可於表格內利用滑鼠滾輪或手勢滑動瀏覽。")
 
@@ -38,13 +56,13 @@ with st.sidebar:
                 
                 # 依 Item 數字由小到大排序
                 df_filtered['Item_num'] = pd.to_numeric(df_filtered['Item'], errors='coerce')
-                df_filtered = df_filtered.sort_values(by=['Item_num', 'Item'], ascending=True).drop(columns=['Item_num'])
+                df_filtered = df_values = df_filtered.sort_values(by=['Item_num', 'Item'], ascending=True).drop(columns=['Item_num'])
                 
-                # 🌟 【修正時區 BUG】：強制指定抓取台灣台北時間 (UTC+8)
+                # 修正時區 BUG：強制指定抓取台灣台北時間 (UTC+8)
                 tz_taipei = zoneinfo.ZoneInfo("Asia/Taipei")
                 current_time = datetime.now(tz_taipei).strftime("%Y-%m-%d %H:%M")
                 
-                # 2. 擷取上傳的 Excel 檔案名稱作為資料版本
+                # 擷取上傳的 Excel 檔案名稱作為資料版本
                 file_version_name = uploaded_file.name
                 
                 # 把新的時間與檔案名稱版本存進 Meta 檔案
@@ -57,9 +75,9 @@ with st.sidebar:
             except Exception as e:
                 st.sidebar.error(f"解析失敗，請確認檔案內有「成本-15」分頁。錯誤: {e}")
 
-    # 🌟 【新需求】：在左側邊欄最下方標註目前的軟體版本
+    # 左側邊欄最下方標註目前的軟體版本
     st.sidebar.markdown("---")
-    st.sidebar.caption("🤖 系統軟體版本：`V2.1`")
+    st.sidebar.caption("🤖 系統軟體版本：`V2.2` (資安強化版)")
     st.sidebar.caption("⚙️ 核心引擎：Streamlit x Python 3.14")
 
 # --- 主畫面顯示區域（客戶看到的畫面） ---
