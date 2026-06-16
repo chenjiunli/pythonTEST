@@ -113,12 +113,14 @@ if os.path.exists(DATA_FILE):
     </div>
     """, unsafe_allow_html=True)
     
-    # 展示乾淨大表格
+    
+# 展示乾淨大表格（已修正為最新版 width='stretch' 語法）
     st.dataframe(
         display_df, 
-        use_container_width=True, 
+        width='stretch', # 💡 原本是 use_container_width=True
         hide_index=True,
         height=550 
     )
+
 else:
     st.warning("⏳ 內部管理員尚未上傳初始化 BOM 資料，請聯絡管理員更新。")
