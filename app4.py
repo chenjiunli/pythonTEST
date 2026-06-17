@@ -6,10 +6,11 @@ import re
 from datetime import datetime
 import zoneinfo
 
-# 保持官方標準設定，不強行干涉側邊欄狀態
+# 側邊欄強制保持展開
 st.set_page_config(
     page_title="SAA TCS Controller V2.0 專案進度查詢", 
     layout="wide",
+    initial_sidebar_state="expanded",
     menu_items={
         'Get Help': None,
         'Report a bug': None,
@@ -17,20 +18,15 @@ st.set_page_config(
     }
 )
 
-# 徹底簡化 CSS：拿掉所有強行隱藏、干涉側邊欄控制鈕的語法，只保留數據防拷貝與隱藏表格右上角雜項按鈕
+# 網頁外觀純淨化與防拷貝機制
 st.markdown("""
     <style>
-    /* 1. 隱藏數據表格右上角的所有控制按鈕 */
-    [data-testid="stDataFrameToolbar"] {
-        display: none !important;
-    }
-    
-    /* 2. 隱藏 Streamlit 網頁右上角最底層的固定選單與底部標籤 */
+    /* 隱藏數據表格右上角的所有控制按鈕 */
+    [data-testid="stDataFrameToolbar"] { display: none !important; }
+    /* 只隱藏主選單與頁尾 */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
-    
-    /* 3. 資安防拷貝機制 */
+    /* 資安防拷貝機制 */
     [data-testid="stDataFrame"], [data-testid="stMetric"], .stMarkdown {
         -webkit-user-select: none !important;
         -moz-user-select: none !important;
@@ -40,15 +36,25 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 專案大標題
 st.title("🛠️ SAA TCS Controller V2.0 專案進度即時查詢面板")
 st.write("🤝 本面板資料已自動同步，並依 Item 進行排序。您可於表格內利用滑鼠滾輪或手勢滑動瀏覽。")
 
-# 設定儲存空間的檔案名稱
 DATA_FILE = "latest_bom_data.pkl"
 META_FILE = "bom_meta_info.pkl"  
 
-# 管理員更新區域（左側側邊欄：保留官方所有標準控制鈕，收合、展開絕對正常）
+# 數字安全清洗器：處理千分位逗號與不規則字元
+def clean_numeric_values(val):
+    if pd.isna(val): return 0
+    val_str = str(val).strip().replace(',', '')
+    match = re.search(r'-?\d+\.?\d*', val_str)
+    if match:
+        try:
+            num = float(match.group())
+            return int(num) if num > 0 else 0
+        except:
+            return 0
+    return 0
+
 with st.sidebar:
     st.markdown("### ⚙️ 內部資料管理")
     password = st.text_input("管理員密碼：", type="password")
@@ -59,66 +65,48 @@ with st.sidebar:
         
         if uploaded_file is not None:
             try:
-                # 強制不設標頭，把 Excel 視為最純粹的格子矩陣
+                # 1. 讀取 Excel (最原始狀態，不解析標頭)
                 raw_df = pd.read_excel(uploaded_file, sheet_name="成本-15", header=None)
                 
-                # 初始化頂部指標
-                sum_delivery = 0
-                sum_produce = 0
-                sum_stock = 0
+                # --- 🐛 除錯模式透視鏡 ---
+                st.sidebar.markdown("---")
+                st.sidebar.write("### 🐛 除錯模式：看看 Pandas 抓到什麼？")
+                st.sidebar.code(f"N1 (0, 13) 值：{raw_df.iloc[0, 13]}")
+                st.sidebar.code(f"N2 (1, 13) 值：{raw_df.iloc[1, 13]}")
+                st.sidebar.code(f"N3 (2, 13) 值：{raw_df.iloc[2, 13]}")
+                st.sidebar.code(f"Q欄前五筆：\n{raw_df.iloc[0:5, 16].tolist()}")
+                st.sidebar.markdown("---")
+                # -------------------------
+
+                # 2. 🎯【絕對座標鎖定】：直接抓取 N1, N2, N3 的數值 (N欄 = Index 13)
+                sum_delivery = clean_numeric_values(raw_df.iloc[0, 13])  # N1
+                sum_produce = clean_numeric_values(raw_df.iloc[1, 13])   # N2
+                sum_stock = clean_numeric_values(raw_df.iloc[2, 13])     # N3
                 
-                # 全文字地毯式掃描前 8 列，智能抓取 10, 15, 15
-                for r_idx in range(min(8, len(raw_df))):
-                    for c_idx in range(raw_df.shape[1]):
-                        cell_val = str(raw_df.iloc[r_idx, c_idx]).strip()
-                        if cell_val and cell_val != "nan" and cell_val != "None":
-                            if "交貨數量" in cell_val:
-                                nums = re.findall(r'\d+', cell_val)
-                                if nums: sum_delivery = int(nums[0])
-                            elif "生產數量" in cell_val:
-                                nums = re.findall(r'\d+', cell_val)
-                                if nums: sum_produce = int(nums[0])
-                            elif "備貨數量" in cell_val:
-                                nums = re.findall(r'\d+', cell_val)
-                                if nums: sum_stock = int(nums[0])
+                # 3. 🎯【絕對欄位鎖定】：A=0, C=2, K=10, Q=16, AB=27
+                clean_df = pd.DataFrame({
+                    "Item": raw_df.iloc[:, 0],               # A欄
+                    "Manufacturer_P/N": raw_df.iloc[:, 2],   # C欄
+                    "Manufacture_Name": raw_df.iloc[:, 10],  # K欄
+                    "raw_shortage": raw_df.iloc[:, 16],      # Q欄 (缺貨數量)
+                    "交期": raw_df.iloc[:, 27]               # AB欄
+                })
                 
-                if sum_delivery == 0 and sum_produce == 0 and sum_stock == 0:
-                    sum_delivery = 10
-                    sum_produce = 15
-                    sum_stock = 15
+                # 4. 行數過濾雜訊 (只保留 Item 欄位是純數字的列)
+                df_data = clean_df.dropna(subset=["Item"]).copy()
+                df_data["Item"] = df_data["Item"].astype(str).str.strip()
+                df_data = df_data[df_data["Item"].str.match(r'^\d+$', na=False)]
                 
-                # 自動尋找底下 Item 物料內文起始列
-                start_row_idx = -1
-                for idx, row in raw_df.iterrows():
-                    val = str(row.iloc[0]).strip()
-                    if val in ["1", "1.0"]:
-                        start_row_idx = idx
-                        break
-                if start_row_idx == -1:
-                    start_row_idx = 4 
+                # 5. 清洗缺料數據 (小於等於 0 或文字皆轉換為 0)
+                df_data["缺料"] = df_data["raw_shortage"].apply(clean_numeric_values)
                 
-                # 擷取純資料物料區間
-                df_data = raw_df.iloc[start_row_idx:].copy()
-                
-                # 資料列過濾
-                df_data = df_data.dropna(subset=[0])
-                df_data[0] = df_data[0].astype(str).str.strip()
-                df_data = df_data[df_data[0] != ""]
-                df_data = df_data[~df_data[0].str.contains("總計|小計|合計|Total|total|項次|None", na=True)]
-                
-                # --- 建立清洗與輸出主畫面用的表格（老老實實死綁幾何位置） ---
+                # 6. 構建最終輸出
                 df_filtered = pd.DataFrame()
-                df_filtered["Item"] = df_data.iloc[:, 0]                                              # A 欄 (0)
-                df_filtered["Manufacturer_P/N"] = df_data.iloc[:, 2] if df_data.shape[1] > 2 else ""   # C 欄 (2)
-                df_filtered["Manufacture_Name"] = df_data.iloc[:, 10] if df_data.shape[1] > 10 else "" # K 欄 (10)
-                
-                # 🔒 堅決綁定 Q 欄 (索引 16)，並且在第一時間把負數強制歸零
-                q_raw = df_data.iloc[:, 16] if df_data.shape[1] > 16 else "0"
-                q_numeric = pd.to_numeric(q_raw, errors='coerce').fillna(0)
-                df_filtered["缺料"] = q_numeric.apply(lambda x: int(x) if x > 0 else 0)
-                
-                # 🔒 堅決綁定 AB 欄 (索引 27)
-                df_filtered["交期"] = df_data.iloc[:, 27] if df_data.shape[1] > 27 else ""
+                df_filtered["Item"] = df_data["Item"]
+                df_filtered["Manufacturer_P/N"] = df_data["Manufacturer_P/N"]
+                df_filtered["Manufacture_Name"] = df_data["Manufacture_Name"]
+                df_filtered["缺料"] = df_data["缺料"]
+                df_filtered["交期"] = df_data["交期"]
                 
                 # --- 資料型態安全轉換 ---
                 for col in df_filtered.columns:
@@ -126,17 +114,17 @@ with st.sidebar:
                         df_filtered[col] = df_filtered[col].apply(
                             lambda x: x.strftime('%Y/%m/%d') if isinstance(x, datetime) or hasattr(x, 'strftime') else str(x).strip()
                         )
-                        df_filtered[col] = df_filtered[col].replace({"NaT": "", "nan": ""})
+                        df_filtered[col] = df_filtered[col].replace({"NaT": "", "nan": "", "None": ""})
                     elif col == "缺料":
                         df_filtered[col] = df_filtered[col].astype(str)
                     else:
                         df_filtered[col] = df_filtered[col].astype(str).str.strip()
                 
-                # 依 Item 排序
+                # 依 Item 自然數字排序
                 df_filtered['Item_num'] = pd.to_numeric(df_filtered['Item'], errors='coerce')
-                df_filtered = df_filtered.sort_values(by=['Item_num', 'Item'], ascending=True).drop(columns=['Item_num'])
+                df_filtered = df_filtered.sort_values(by=['Item_num'], ascending=True).drop(columns=['Item_num'])
                 
-                # 取得更新時間
+                # 取得時間
                 tz_taibei = zoneinfo.ZoneInfo("Asia/Taipei")
                 current_time = datetime.now(tz_taibei).strftime("%Y-%m-%d %H:%M")
                 
@@ -151,13 +139,13 @@ with st.sidebar:
                 new_meta.to_pickle(META_FILE)
                 df_filtered.to_pickle(DATA_FILE)
                 
-                st.sidebar.success(f"🎉 資料重新校準成功！")
+                st.sidebar.success(f"🎉 絕對座標同步成功！")
                 st.rerun()
             except Exception as e:
                 st.sidebar.error(f"解析失敗。錯誤: {e}")
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("🤖 系統軟體版本：`V4.7` (極簡硬編碼修復版)")
+    st.sidebar.caption("🤖 系統軟體版本：`V5.5` (含除錯透視鏡)")
     st.sidebar.caption("⚙️ 核心引擎：Streamlit x Python")
 
 # --- 主畫面顯示區域 ---
@@ -182,7 +170,6 @@ if is_data_ready:
     
     st.info(f"📌 **資料版本 (BOM 檔名)：** {version_label}")
     
-    # 頂部三大指標卡片
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric(label="📦 總交貨數量", value=f"{v_delivery:,}")
@@ -195,11 +182,10 @@ if is_data_ready:
     with col_left:
         st.caption(f"⏱️ **更新時間：** {time_label} ｜ 📊 **總計：** {len(display_df)} 筆")
     with col_right:
-        st.caption("💡 *註：缺料小於等於 0 或負數之品項，網頁皆已自動校正顯示為 0。*")
+        st.caption("💡 *註：缺料欄位已綁定 Q 欄，小於等於 0 之品項顯示為 0。*")
     
     st.markdown("---")
     
-    # 展示純淨 5 欄位表格
     st.dataframe(
         display_df, 
         width='stretch', 
@@ -207,4 +193,4 @@ if is_data_ready:
         height=550 
     )
 else:
-    st.warning("⏳ 系統正在進行規格升級。請管理員展開左側選單，輸入密碼並重新上傳最新的 BOM Excel 檔案進行資料初始化。")
+    st.warning("⏳ 系統資料尚未建立。請管理員展開左側選單，輸入密碼並上傳最新的 BOM Excel 檔案。")
