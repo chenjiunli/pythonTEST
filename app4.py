@@ -5,17 +5,17 @@ import os
 from datetime import datetime
 import zoneinfo
 
-# 🌟 方案 A：維持側邊欄預設收合
+# 方案 A：維持側邊欄預設收合
 st.set_page_config(
     page_title="SAA TCS Controller V2.0 專案進度查詢", 
     layout="wide",
     initial_sidebar_state="collapsed" 
 )
 
-# 🌟 隱藏所有不必要的元件（包含右上角 GitHub 貓咪圖示、表格工具列、側邊欄標題）
+# 隱藏所有不必要的元件（包含右上角 GitHub 貓咪圖示、表格工具列、側邊欄標題）
 st.markdown("""
     <style>
-    /* 🛠️ 取消右上角的 GitHub 連結圖示與主選單 */
+    /* 取消右上角的 GitHub 連結圖示與主選單 */
     #MainMenu, footer, header {
         visibility: hidden !important;
         height: 0 !important;
@@ -60,28 +60,24 @@ with st.sidebar:
         
         if uploaded_file is not None:
             try:
-                # 1. 讀取「成本-15」分頁
-                # 為了抓取前三行的數量資訊，我們多讀取原始表頭上方
+                # 1. 讀取前 4 行嘗試動態提取交貨、生產、備貨數量
                 raw_df = pd.read_excel(uploaded_file, sheet_name="成本-15", header=None, nrows=4)
                 
-                # 🎯 動態提取前三行的交貨、生產、備貨數量（假設這三個中文字在 A 欄或 B 欄附近）
-                # 為了防呆，我們在全表前 4 行搜尋關鍵字並抓取其右方/下方的數字
                 qty_info = {"交貨數量": "未知", "生產數量": "未知", "備貨數量": "未知"}
                 for i in range(min(4, len(raw_df))):
                     row_str = " ".join([str(val) for val in raw_df.iloc[i].values])
                     for key in qty_info.keys():
                         if key in row_str:
-                            # 嘗試撈取該行中非中文字的數字
                             for val in raw_df.iloc[i].values:
                                 if isinstance(val, (int, float)) and not pd.isna(val):
                                     qty_info[key] = int(val)
                                     break
 
-                # 2. 正式讀取主要資料，第 4 列為標頭 (header=3)
+                # 2. 正式讀取主要資料
                 df = pd.read_excel(uploaded_file, sheet_name="成本-15", header=3)
                 df.columns = [str(c).strip() for c in df.columns]
                 
-                # 🎯 增加缺料欄位 Q
+                # 🎯 這裡改成動態撈取：有缺料就撈，沒缺料也不會出錯
                 target_cols = ["Item", "Manufacturer_P/N", "Manufacture_Name", "缺料", "交期"]
                 valid_cols = [c for c in target_cols if c in df.columns]
                 
@@ -91,24 +87,25 @@ with st.sidebar:
                 df_filtered['Item_num'] = pd.to_numeric(df_filtered['Item'], errors='coerce')
                 df_filtered = df_filtered.sort_values(by=['Item_num', 'Item'], ascending=True).drop(columns=['Item_num'])
                 
-                # 修正時區
+                # 時區控制
                 tz_taipei = zoneinfo.ZoneInfo("Asia/Taipei")
                 current_time = datetime.now(tz_taipei).strftime("%Y-%m-%d %H:%M")
                 
-                # 擷取上傳的 Excel 檔案名稱作為資料版本
+                # 檔案名稱版本
                 file_version_name = uploaded_file.name
                 
-                # 把新的時間、檔案名稱版本、以及動態數量存進 Meta 檔案
+                # 存進 Meta 檔案（動態保留撈到的實際欄位清單）
                 new_meta = pd.DataFrame([{
                     "version": file_version_name, 
                     "update_time": current_time,
                     "deliv_qty": qty_info["交貨數量"],
                     "prod_qty": qty_info["生產數量"],
-                    "stock_qty": qty_info["備貨數量"]
+                    "stock_qty": qty_info["備貨數量"],
+                    "actual_cols": ",".join(valid_cols) # 記錄這次到底撈到了哪些欄位
                 }])
                 new_meta.to_pickle(META_FILE)
                 
-                # 永久儲存資料主體到伺服器空間
+                # 永久儲存資料主體
                 df_filtered.to_pickle(DATA_FILE)
                 st.sidebar.success(f"🎉 資料同步成功！\n版本：{file_version_name}")
             except Exception as e:
@@ -116,7 +113,7 @@ with st.sidebar:
 
     # 左側邊欄最下方標註目前的軟體版本
     st.sidebar.markdown("---")
-    st.sidebar.caption("🤖 系統軟體版本：`V2.4` (專案客製版)")
+    st.sidebar.caption("🤖 系統軟體版本：`V2.5` (防錯穩健版)")
     st.sidebar.caption("⚙️ 核心引擎：Streamlit x Python 3.14")
 
 # --- 主畫面顯示區域（客戶看到的畫面） ---
@@ -124,25 +121,29 @@ if os.path.exists(DATA_FILE):
     # 讀取資料
     display_df = pd.read_pickle(DATA_FILE)
     
-    # 重新對齊欄位名稱（包含新的缺料欄位）
-    display_df.columns = ["Item", "Manufacturer_P/N", "Manufacture_Name", "缺料", "交期"]
-    
     # 預設歷史與數量紀錄
     version_label = "未命名版本"
     time_label = "未知"
     d_q, p_q, s_q = "隨檔案更動", "隨檔案更動", "隨檔案更動"
+    actual_cols_list = list(display_df.columns)
     
     if os.path.exists(META_FILE):
         meta_df = pd.read_pickle(META_FILE)
         version_label = meta_df.loc[0, 'version']
         time_label = meta_df.loc[0, 'update_time']
-        # 讀取動態數量
         if "deliv_qty" in meta_df.columns:
             d_q = meta_df.loc[0, 'deliv_qty']
             p_q = meta_df.loc[0, 'prod_qty']
             s_q = meta_df.loc[0, 'stock_qty']
+        # 🎯 核心防錯安全機制：動態根據儲存的歷史紀錄，重新對齊欄位名字，有多少欄位給多少名字，絕對不硬塞
+        if "actual_cols" in meta_df.columns and not pd.isna(meta_df.loc[0, 'actual_cols']):
+            actual_cols_list = meta_df.loc[0, 'actual_cols'].split(",")
+
+    # 確保資料欄位長度跟新名字長度一致，避免任何跑版
+    if len(display_df.columns) == len(actual_cols_list):
+        display_df.columns = actual_cols_list
     
-    # 🌟 資訊看板區優化：加入動態數量顯示（交貨、生產、備貨數量）
+    # 資訊看板區
     st.markdown(f"""
     <div style="background-color: #f1f5f9; padding: 15px; border-radius: 8px; border-left: 5px solid #0284c7; margin-bottom: 10px;">
         <p style="margin: 0; font-size: 14px; color: #64748b; font-weight: bold;">📌 資料版本 (BOM 檔名)：</p>
@@ -167,8 +168,9 @@ if os.path.exists(DATA_FILE):
     </div>
     """, unsafe_allow_html=True)
     
-    # 🌟 新增：缺料欄位邏輯備註說明字樣
-    st.caption("💡 備註：「缺料」欄位之數據係以【備料數量】扣除【庫存量】自動計算得出。")
+    # 判斷目前表格內到底有沒有撈到缺料欄位，有的話才顯示備註小字
+    if "缺料" in display_df.columns:
+        st.caption("💡 備註：「缺料」欄位之數據係以【備料數量】扣除【庫存量】自動計算得出。")
     
     # 展示乾淨大表格
     st.dataframe(
