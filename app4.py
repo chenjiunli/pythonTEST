@@ -176,7 +176,7 @@ with st.sidebar:
                 st.sidebar.error(f"解析失敗。錯誤: {e}")
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("🤖 系統軟體版本：`V4.3` (100% 指標一致版)")
+    st.sidebar.caption("🤖 系統軟體版本：`V4.3`")
     st.sidebar.caption("⚙️ 核心引擎：Streamlit x Python")
 
 # --- 主畫面顯示區域 ---
@@ -186,7 +186,7 @@ if os.path.exists(DATA_FILE) and os.path.exists(META_FILE):
     try:
         display_df = pd.read_pickle(DATA_FILE)
         if len(display_df.columns) == 5:
-            display_df.columns = ["Item", "Manufacturer_P/N", "Manufacture_Name", "缺料 (Q欄)", "交期"]
+            display_df.columns = ["Item", "Manufacturer_P/N", "Manufacture_Name", "缺料", "交期"]
             is_data_ready = True
     except:
         is_data_ready = False
@@ -214,7 +214,7 @@ if is_data_ready:
     with col_left:
         st.caption(f"⏱️ **更新時間：** {time_label} ｜ 📊 **總計：** {len(display_df)} 筆")
     with col_right:
-        st.caption("💡 *註：本面板所有數據皆與原始 BOM Excel 內容完全同步。*")
+        st.caption("💡 *註：缺料欄位=(備料數量 - 庫存量)*")
     
     st.markdown("---")
     
