@@ -41,8 +41,9 @@ st.write("🤝 本面板資料已自動同步，並依 Item 進行排序。您�
 
 DATA_FILE = "latest_bom_data.pkl"
 META_FILE = "bom_meta_info.pkl"  
+PROG_FILE = "progress_data.pkl"  
 
-# 數字安全清洗器：處理千分位逗號與不規則字元
+# 數字安全清洗器
 def clean_numeric_values(val):
     if pd.isna(val): return 0
     val_str = str(val).strip().replace(',', '')
@@ -61,91 +62,195 @@ with st.sidebar:
     
     if password == "1234":
         st.success("密碼正確！")
-        uploaded_file = st.file_uploader("請上傳最新的 BOM Excel 檔案：", type=["xlsx"])
+        uploaded_file = st.file_uploader("請上傳最新的 Excel 檔案 (包含 BOM 與進度 Sheet)：", type=["xlsx"])
         
         if uploaded_file is not None:
-            try:
-                # 1. 讀取 Excel (最原始狀態，不解析標頭)
-                raw_df = pd.read_excel(uploaded_file, sheet_name="成本-15", header=None)
+            # 建立檔案的唯一識別碼，用來防止無限迴圈重複讀取
+            file_id = f"{uploaded_file.name}_{uploaded_file.size}"
+            
+            # 如果這個檔案還沒被處理過，才開始跑進度條
+            if st.session_state.get('processed_file') != file_id:
+                progress_bar = st.progress(0)
+                status_text = st.empty()
                 
-                # --- 🐛 除錯模式透視鏡 ---
-                st.sidebar.markdown("---")
-                st.sidebar.write("### 🐛 除錯模式：看看 Pandas 抓到什麼？")
-                st.sidebar.code(f"N1 (0, 13) 值：{raw_df.iloc[0, 13]}")
-                st.sidebar.code(f"N2 (1, 13) 值：{raw_df.iloc[1, 13]}")
-                st.sidebar.code(f"N3 (2, 13) 值：{raw_df.iloc[2, 13]}")
-                st.sidebar.code(f"Q欄前五筆：\n{raw_df.iloc[0:5, 16].tolist()}")
-                st.sidebar.markdown("---")
-                # -------------------------
+                try:
+                    # --- 階段 1 ---
+                    status_text.caption("⏳ [10%] 正在載入並解析 Excel 結構 (這需要一點時間)...")
+                    progress_bar.progress(10)
+                    xls = pd.ExcelFile(uploaded_file)
+                    
+                    if "成本-15" in xls.sheet_names:
+                        # --- 階段 2 ---
+                        status_text.caption("⏳ [30%] 正在讀取 BOM 物料清單...")
+                        progress_bar.progress(30)
+                        raw_df = pd.read_excel(xls, sheet_name="成本-15", header=None)
+                        
+                        # --- 階段 3 ---
+                        status_text.caption("⏳ [50%] 正在過濾並清洗缺料數據...")
+                        progress_bar.progress(50)
+                        
+                        # 🎯 絕對座標鎖定 (N1, N2, N3)
+                        sum_delivery = clean_numeric_values(raw_df.iloc[0, 13])  # N1
+                        sum_produce = clean_numeric_values(raw_df.iloc[1, 13])   # N2
+                        sum_stock = clean_numeric_values(raw_df.iloc[2, 13])     # N3
+                        
+                        # 🎯 絕對欄位鎖定 (A, C, K, Q, AB)
+                        clean_df = pd.DataFrame({
+                            "Item": raw_df.iloc[:, 0],               # A欄
+                            "Manufacturer_P/N": raw_df.iloc[:, 2],   # C欄
+                            "Manufacture_Name": raw_df.iloc[:, 10],  # K欄
+                            "raw_shortage": raw_df.iloc[:, 16],      # Q欄 (缺貨數量)
+                            "交期": raw_df.iloc[:, 27]               # AB欄
+                        })
+                        
+                        df_data = clean_df.dropna(subset=["Item"]).copy()
+                        df_data["Item"] = df_data["Item"].astype(str).str.strip()
+                        df_data = df_data[df_data["Item"].str.match(r'^\d+$', na=False)]
+                        df_data["缺料"] = df_data["raw_shortage"].apply(clean_numeric_values)
+                        
+                        # --- 階段 4 ---
+                        status_text.caption("⏳ [70%] 正在儲存 BOM 資料...")
+                        progress_bar.progress(70)
+                        
+                        df_filtered = pd.DataFrame()
+                        df_filtered["Item"] = df_data["Item"]
+                        df_filtered["Manufacturer_P/N"] = df_data["Manufacturer_P/N"]
+                        df_filtered["Manufacture_Name"] = df_data["Manufacture_Name"]
+                        df_filtered["缺料"] = df_data["缺料"]
+                        df_filtered["交期"] = df_data["交期"]
+                        
+                        for col in df_filtered.columns:
+                            if col == "交期":
+                                df_filtered[col] = df_filtered[col].apply(
+                                    lambda x: x.strftime('%Y/%m/%d') if isinstance(x, datetime) or hasattr(x, 'strftime') else str(x).strip()
+                                )
+                                df_filtered[col] = df_filtered[col].replace({"NaT": "", "nan": "", "None": ""})
+                            elif col == "缺料":
+                                df_filtered[col] = df_filtered[col].astype(str)
+                            else:
+                                df_filtered[col] = df_filtered[col].astype(str).str.strip()
+                        
+                        df_filtered['Item_num'] = pd.to_numeric(df_filtered['Item'], errors='coerce')
+                        df_filtered = df_filtered.sort_values(by=['Item_num'], ascending=True).drop(columns=['Item_num'])
+                        
+                        tz_taibei = zoneinfo.ZoneInfo("Asia/Taipei")
+                        current_time = datetime.now(tz_taibei).strftime("%Y-%m-%d %H:%M")
+                        
+                        new_meta = pd.DataFrame([{
+                            "version": uploaded_file.name, 
+                            "update_time": current_time,
+                            "sum_delivery": sum_delivery,
+                            "sum_produce": sum_produce,
+                            "sum_stock": sum_stock
+                        }])
+                        new_meta.to_pickle(META_FILE)
+                        df_filtered.to_pickle(DATA_FILE)
 
-                # 2. 🎯【絕對座標鎖定】：直接抓取 N1, N2, N3 的數值 (N欄 = Index 13)
-                sum_delivery = clean_numeric_values(raw_df.iloc[0, 13])  # N1
-                sum_produce = clean_numeric_values(raw_df.iloc[1, 13])   # N2
-                sum_stock = clean_numeric_values(raw_df.iloc[2, 13])     # N3
-                
-                # 3. 🎯【絕對欄位鎖定】：A=0, C=2, K=10, Q=16, AB=27
-                clean_df = pd.DataFrame({
-                    "Item": raw_df.iloc[:, 0],               # A欄
-                    "Manufacturer_P/N": raw_df.iloc[:, 2],   # C欄
-                    "Manufacture_Name": raw_df.iloc[:, 10],  # K欄
-                    "raw_shortage": raw_df.iloc[:, 16],      # Q欄 (缺貨數量)
-                    "交期": raw_df.iloc[:, 27]               # AB欄
-                })
-                
-                # 4. 行數過濾雜訊 (只保留 Item 欄位是純數字的列)
-                df_data = clean_df.dropna(subset=["Item"]).copy()
-                df_data["Item"] = df_data["Item"].astype(str).str.strip()
-                df_data = df_data[df_data["Item"].str.match(r'^\d+$', na=False)]
-                
-                # 5. 清洗缺料數據 (小於等於 0 或文字皆轉換為 0)
-                df_data["缺料"] = df_data["raw_shortage"].apply(clean_numeric_values)
-                
-                # 6. 構建最終輸出
-                df_filtered = pd.DataFrame()
-                df_filtered["Item"] = df_data["Item"]
-                df_filtered["Manufacturer_P/N"] = df_data["Manufacturer_P/N"]
-                df_filtered["Manufacture_Name"] = df_data["Manufacture_Name"]
-                df_filtered["缺料"] = df_data["缺料"]
-                df_filtered["交期"] = df_data["交期"]
-                
-                # --- 資料型態安全轉換 ---
-                for col in df_filtered.columns:
-                    if col == "交期":
-                        df_filtered[col] = df_filtered[col].apply(
-                            lambda x: x.strftime('%Y/%m/%d') if isinstance(x, datetime) or hasattr(x, 'strftime') else str(x).strip()
-                        )
-                        df_filtered[col] = df_filtered[col].replace({"NaT": "", "nan": "", "None": ""})
-                    elif col == "缺料":
-                        df_filtered[col] = df_filtered[col].astype(str)
-                    else:
-                        df_filtered[col] = df_filtered[col].astype(str).str.strip()
-                
-                # 依 Item 自然數字排序
-                df_filtered['Item_num'] = pd.to_numeric(df_filtered['Item'], errors='coerce')
-                df_filtered = df_filtered.sort_values(by=['Item_num'], ascending=True).drop(columns=['Item_num'])
-                
-                # 取得時間
-                tz_taibei = zoneinfo.ZoneInfo("Asia/Taipei")
-                current_time = datetime.now(tz_taibei).strftime("%Y-%m-%d %H:%M")
-                
-                # 存檔至快取
-                new_meta = pd.DataFrame([{
-                    "version": uploaded_file.name, 
-                    "update_time": current_time,
-                    "sum_delivery": sum_delivery,
-                    "sum_produce": sum_produce,
-                    "sum_stock": sum_stock
-                }])
-                new_meta.to_pickle(META_FILE)
-                df_filtered.to_pickle(DATA_FILE)
-                
-                st.sidebar.success(f"🎉 絕對座標同步成功！")
-                st.rerun()
-            except Exception as e:
-                st.sidebar.error(f"解析失敗。錯誤: {e}")
+                    prog_sheet_name = None
+                    for sn in xls.sheet_names:
+                        if "進度" in sn:  
+                            prog_sheet_name = sn
+                            break
+                    
+                    if prog_sheet_name:
+                        # --- 階段 5 ---
+                        status_text.caption("⏳ [80%] 正在讀取排程進度表 (檔案較大，請稍候)...")
+                        progress_bar.progress(80)
+                        raw_prog = pd.read_excel(xls, sheet_name=prog_sheet_name, header=None)
+                        
+                        # --- 階段 6 ---
+                        status_text.caption("⏳ [90%] 正在分析排程時間...")
+                        progress_bar.progress(90)
+                        
+                        prog_data = []
+                        target_tasks = [
+                            ("PCB", "到料", "PCB 到料完成時間"),
+                            ("SMT", "齊料", "SMT料 齊料時間"),
+                            ("DIP", "齊料", "DIP料 齊料時間"),
+                            ("SMT", "上線", "SMT 安排上線時間"),
+                            ("DIP", "上線", "DIP 安排上線時間"),
+                            ("交貨", "", "交貨時間")
+                        ]
+                        
+                        found_tasks = {}
+                        for r in range(len(raw_prog)):
+                            row_vals = raw_prog.iloc[r].values
+                            row_str_combined = "".join([str(x).strip().upper() for x in row_vals]).replace(" ", "")
+                            
+                            for kw1, kw2, display_name in target_tasks:
+                                if display_name in found_tasks:
+                                    continue
+                                
+                                if kw1.upper() in row_str_combined and kw2.upper() in row_str_combined:
+                                    task_col_idx = -1
+                                    for c_idx, val in enumerate(row_vals):
+                                        v_str = str(val).strip().upper().replace(" ", "")
+                                        if kw1.upper() in v_str:
+                                            task_col_idx = c_idx
+                                            break
+                                    
+                                    start_date, end_date = "", ""
+                                    next_vals = []
+                                    if task_col_idx != -1:
+                                        for c_idx in range(task_col_idx + 1, len(row_vals)):
+                                            v = row_vals[c_idx]
+                                            if pd.notna(v) and str(v).strip() not in ['', 'nan', 'None', 'NaT']:
+                                                next_vals.append(v)
+                                    
+                                    dates = []
+                                    for v in next_vals:
+                                        if isinstance(v, datetime):
+                                            dates.append(v.strftime('%Y-%m-%d'))
+                                        elif isinstance(v, str):
+                                            d_str = v.strip()
+                                            match1 = re.search(r'\d{4}[-/]\d{1,2}[-/]\d{1,2}', d_str)
+                                            match2 = re.search(r'\d{1,2}[-/]\d{1,2}', d_str)
+                                            if match1: dates.append(match1.group())
+                                            elif match2: dates.append(match2.group())
+                                    
+                                    if len(dates) >= 2:
+                                        start_date, end_date = dates[0], dates[1]
+                                    elif len(dates) == 1:
+                                        start_date = dates[0]
+                                        end_date = dates[0] 
+                                    else:
+                                        if len(next_vals) > 0: start_date = str(next_vals[0]).strip()
+                                        if len(next_vals) > 1: end_date = str(next_vals[1]).strip()
+                                    
+                                    found_tasks[display_name] = {
+                                        "階段任務": display_name,
+                                        "開始時間": start_date,
+                                        "結束時間": end_date
+                                    }
+                        
+                        for _, _, display_name in target_tasks:
+                            if display_name in found_tasks:
+                                prog_data.append(found_tasks[display_name])
+                            else:
+                                prog_data.append({"階段任務": display_name, "開始時間": "-", "結束時間": "-"})
+                        
+                        pd.DataFrame(prog_data).to_pickle(PROG_FILE)
+
+                    # --- 階段 7：完成 ---
+                    progress_bar.progress(100)
+                    status_text.empty()
+                    progress_bar.empty()
+                    
+                    # 🔒 標記檔案已處理，防止無限迴圈
+                    st.session_state['processed_file'] = file_id
+                    st.sidebar.success(f"🎉 檔案 {uploaded_file.name} 數據同步成功！")
+                    st.rerun()
+                    
+                except Exception as e:
+                    progress_bar.empty()
+                    status_text.empty()
+                    st.sidebar.error(f"解析失敗。錯誤: {e}")
+            else:
+                # 檔案已經處理過，只顯示成功訊息，不再跑進度條也不再觸發 rerun
+                st.sidebar.success(f"✅ 檔案 {uploaded_file.name} 已完成同步。")
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("🤖 系統軟體版本：`V5.5` (含除錯透視鏡)")
+    st.sidebar.caption("🤖 系統軟體版本：`V6.3` (防無限迴圈流暢版)")
     st.sidebar.caption("⚙️ 核心引擎：Streamlit x Python")
 
 # --- 主畫面顯示區域 ---
@@ -154,22 +259,24 @@ is_data_ready = False
 if os.path.exists(DATA_FILE) and os.path.exists(META_FILE):
     try:
         display_df = pd.read_pickle(DATA_FILE)
-        if len(display_df.columns) == 5:
-            display_df.columns = ["Item", "Manufacturer_P/N", "Manufacture_Name", "缺料", "交期"]
-            is_data_ready = True
+        is_data_ready = True
     except:
         is_data_ready = False
 
 if is_data_ready:
+    # 讀取快取
     meta_df = pd.read_pickle(META_FILE)
-    version_label = meta_df.loc[0, 'version']
-    time_label = meta_df.loc[0, 'update_time']
-    v_delivery = int(meta_df.loc[0, 'sum_delivery'])
-    v_produce = int(meta_df.loc[0, 'sum_produce'])
-    v_stock = int(meta_df.loc[0, 'sum_stock'])
     
-    st.info(f"📌 **資料版本 (BOM 檔名)：** {version_label}")
+    # 防崩潰設計
+    version_label = meta_df.loc[0, 'version'] if 'version' in meta_df.columns else "未知版本"
+    time_label = meta_df.loc[0, 'update_time'] if 'update_time' in meta_df.columns else "未知時間"
+    v_delivery = int(meta_df.loc[0, 'sum_delivery']) if 'sum_delivery' in meta_df.columns else 0
+    v_produce = int(meta_df.loc[0, 'sum_produce']) if 'sum_produce' in meta_df.columns else 0
+    v_stock = int(meta_df.loc[0, 'sum_stock']) if 'sum_stock' in meta_df.columns else 0
     
+    st.info(f"📌 **資料版本 (檔案名稱)：** {version_label}")
+    
+    # 頂部三大指標卡片
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric(label="📦 總交貨數量", value=f"{v_delivery:,}")
@@ -178,13 +285,25 @@ if is_data_ready:
     with col3:
         st.metric(label="💾 總備貨數量", value=f"{v_stock:,}")
         
+    st.markdown("---")
+    
+    # === 專案排程進度區塊 ===
+    if os.path.exists(PROG_FILE):
+        prog_df_display = pd.read_pickle(PROG_FILE)
+        st.markdown("### 📅 專案排程進度")
+        
+        p_col1, p_col2 = st.columns([1.5, 1])
+        with p_col1:
+            st.dataframe(prog_df_display, use_container_width=True, hide_index=True)
+        st.markdown("---")
+    
+    # === BOM 物料清單區塊 ===
     col_left, col_right = st.columns([2, 1])
     with col_left:
+        st.markdown("### 📋 BOM 物料清單狀態")
         st.caption(f"⏱️ **更新時間：** {time_label} ｜ 📊 **總計：** {len(display_df)} 筆")
     with col_right:
         st.caption("💡 *註：缺料欄位已綁定 Q 欄，小於等於 0 之品項顯示為 0。*")
-    
-    st.markdown("---")
     
     st.dataframe(
         display_df, 
@@ -193,4 +312,4 @@ if is_data_ready:
         height=550 
     )
 else:
-    st.warning("⏳ 系統資料尚未建立。請管理員展開左側選單，輸入密碼並上傳最新的 BOM Excel 檔案。")
+    st.warning("⏳ 系統資料尚未建立。請管理員展開左側選單，輸入密碼並上傳最新的 Excel 檔案。")
