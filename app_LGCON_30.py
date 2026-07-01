@@ -86,7 +86,7 @@ with st.sidebar:
                         progress_bar.progress(30)
                         raw_df = pd.read_excel(xls, sheet_name="成本-30", header=None)
                         
-                        # 1. 🚀 動態尋找頂部統計數據 (避免寫死列數)
+                        # 1. 🚀 動態尋找頂部統計數據
                         sum_delivery = 0
                         sum_produce = 0
                         sum_stock = 0
@@ -100,7 +100,7 @@ with st.sidebar:
                                 elif ("備料數量" in val or "備貨數量" in val) and c_idx + 1 < len(row_vals):
                                     sum_stock = clean_numeric_values(raw_df.iloc[idx, c_idx + 1])
 
-                        # 2. 🚀 智慧搜尋表頭列與欄位位置 (解決 Excel 欄位平移與隱藏問題)
+                        # 2. 🚀 智慧搜尋表頭列與欄位位置
                         header_row_idx = None
                         for idx in range(len(raw_df)):
                             row_str = [str(x).strip().upper() for x in raw_df.iloc[idx].values]
@@ -263,7 +263,7 @@ with st.sidebar:
                 st.sidebar.success(f"✅ 檔案 {uploaded_file.name} 已完成同步。")
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("🤖 系統版本：`V6.9-30Set` (優化純淨面板)")
+    st.sidebar.caption("🤖 系統版本：`V7.0-30Set` (修復 Streamlit 棄用警告)")
     st.sidebar.caption("⚙️ 引擎：Streamlit x Python")
 
 # --- 主畫面顯示區域 ---
@@ -283,7 +283,8 @@ if os.path.exists(DATA_FILE) and os.path.exists(META_FILE):
     if os.path.exists(PROG_FILE):
         st.markdown("### 📅 專案排程進度")
         prog_df = pd.read_pickle(PROG_FILE)
-        st.dataframe(prog_df, use_container_width=True, hide_index=True)
+        # 更新：替換掉 use_container_width=True
+        st.dataframe(prog_df, width='stretch', hide_index=True)
         st.markdown("---")
         
     if os.path.exists(ANOMALY_FILE):
@@ -291,12 +292,12 @@ if os.path.exists(DATA_FILE) and os.path.exists(META_FILE):
         anomaly_df = pd.read_pickle(ANOMALY_FILE)
         if len(anomaly_df) > 0:
             st.warning(f"⚠️ 發現 {len(anomaly_df)} 筆重複料號！請對照表格內的 Reference 欄位確認定義是否正確。")
-            st.dataframe(anomaly_df, use_container_width=True, hide_index=True)
+            # 更新：替換掉 use_container_width=True
+            st.dataframe(anomaly_df, width='stretch', hide_index=True)
         else:
             st.success("✅ 系統檢測完畢，已自動對齊標頭並濾除無效空值，目前無重複定義之異常料號。")
         st.markdown("---")
     
-    # BOM 表顯示 (已移除非必要提示，簡化排版)
     st.markdown("### 📋 BOM 物料清單狀態")
     st.caption(f"⏱️ 更新時間：{meta_df.loc[0, 'update_time']} ｜ 📊 總計：{len(display_df)} 筆")
     
