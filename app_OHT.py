@@ -99,7 +99,7 @@ with st.sidebar:
                         num_cols = len(raw_df.columns)
                         col_item = raw_df.iloc[:, 0] if num_cols > 0 else pd.Series(dtype=object)
                         col_pn = raw_df.iloc[:, 3] if num_cols > 3 else pd.Series(dtype=object)
-                        col_loc = raw_df.iloc[:, 5] if num_cols > 5 else pd.Series(dtype=object) # 🚀 Location
+                        col_loc = raw_df.iloc[:, 2] if num_cols > 2 else pd.Series(dtype=object) # 🚀 Location (修正為 C欄, Index 2)
                         col_partname = raw_df.iloc[:, 7] if num_cols > 7 else pd.Series(dtype=object) # 🚀 Part Name
                         col_mfg = raw_df.iloc[:, 10] if num_cols > 10 else pd.Series(dtype=object)
                         col_short = raw_df.iloc[:, 16] if num_cols > 16 else pd.Series(dtype=object)
